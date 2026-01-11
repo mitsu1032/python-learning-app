@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>Python Learning App - 用語学習</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐍</text></svg>">
+    <!-- テーマを即座に適用（ちらつき防止）- 最優先で実行 -->
+    <script>
+        (function() {
+            var theme, isDark, bgColor;
+            try {
+                theme = localStorage.getItem('theme');
+            } catch(e) {}
+            isDark = theme === 'dark' || (!theme && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            bgColor = isDark ? '#0f172a' : '#f8fafc';
+
+            // html要素に直接適用
+            document.documentElement.style.backgroundColor = bgColor;
+            if (isDark) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+
+            // 同期的にスタイルを注入
+            document.write('<style>html,body{background-color:' + bgColor + '!important}' +
+                (isDark ? ':root{color-scheme:dark}' : '') + '</style>');
+        })();
+    </script>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Chart.js for analytics (must load before Monaco's AMD loader) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <!-- marked.js for markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <!-- Monaco Editor (VSCode editor) -->
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <button class="mobile-menu-btn" id="mobile-menu-btn" title="メニュー">☰</button>
+                <h1 class="logo" id="logo-home" title="ホームに戻る">🐍 Python Learning</h1>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary" id="open-dashboard-btn"><span class="btn-icon">📊</span><span class="btn-label">ダッシュボード</span></button>
+                <button class="btn btn-secondary" id="open-learning-center-btn"><span class="btn-icon">🎓</span><span class="btn-label">学習センター</span></button>
+                <button class="btn btn-secondary" id="open-glossary-btn"><span class="btn-icon">📖</span><span class="btn-label">用語集</span></button>
+                <button class="theme-toggle" id="theme-toggle" title="テーマ切り替え">
+                    <span class="icon-sun">☀️</span>
+                    <span class="icon-moon">🌙</span>
+                </button>
+                <div class="profile-summary" id="profile-summary">
+                    <span class="stats-badge" id="stats-badge">読み込み中...</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Sidebar Overlay (mobile) -->
+            <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+            <!-- Sidebar: Learning History -->
+            <aside class="sidebar" id="sidebar">
+                <button class="sidebar-close-btn" id="sidebar-close-btn">&times;</button>
+                <div class="sidebar-header">
+                    <h2>📚 学習履歴</h2>
+                    <div class="sidebar-actions">
+                        <button class="refresh-btn" id="refresh-history" title="履歴を更新">↻</button>
+                        <button class="clear-history-btn" id="clear-history" title="履歴をクリア">🗑</button>
+                    </div>
+                </div>
+                <div class="history-list" id="history-list">
+                    <p class="empty-message">まだ履歴がありません</p>
+                </div>
+            </aside>
+
+            <!-- Main: Search and Explanation -->
+            <section class="content-area">
+                <!-- Search Box -->
+                <div class="search-section">
+                    <div class="search-box">
+                        <input
+                            type="text"
+                            id="search-input"
+                            placeholder="Python用語を入力（例: リスト, 関数, クラス）"
+                            autocomplete="off"
+                        >
+                        <button id="search-btn" class="btn btn-primary">
+                            <span class="btn-text">検索</span>
+                            <span class="btn-loading" hidden>⏳</span>
+                        </button>
+                    </div>
+                    <p class="search-hint">💡 わからない用語を入力して、レベルに合った解説を受けましょう</p>
+                </div>
+
+                <!-- Dashboard Section -->
+                <section class="dashboard-section" id="dashboard-section" hidden>
+                    <div class="dashboard-header">
+                        <h2>📊 学習ダッシュボード</h2>
+                        <button class="btn btn-outline" id="close-dashboard-btn">✕ 閉じる</button>
+                    </div>
+
+                    <div class="dashboard-content">
+                        <!-- 概要カード -->
+                        <div class="stats-cards">
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-learned">0</div>
+                                <div class="stat-label">理解済み用語</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-searches">0</div>
+                                <div class="stat-label">総検索数</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="study-days">0</div>
+                                <div class="stat-label">学習日数</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="avg-searches">0</div>
+                                <div class="stat-label">平均検索数/日</div>
+                            </div>
+                        </div>
+
+                        <!-- Progress Bar -->
+                        <div class="progress-container" id="progress-container">
+                            <div class="progress-header">
+                                <span class="progress-title">🎯 学習進捗</span>
+                                <span class="progress-stats" id="progress-stats">0 / 100 用語</span>
+                            </div>
+                            <div class="progress-bar-wrapper">
+                                <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+                            </div>
+                            <div class="progress-milestones">
+                                <div class="milestone" id="milestone-1">
+                                    <span class="milestone-icon">🌱</span>
+                                    <span>初心者</span>
+                                </div>
+                                <div class="milestone" id="milestone-2">
+                                    <span class="milestone-icon">📚</span>
+                                    <span>学習中</span>
+                                </div>
+                                <div class="milestone" id="milestone-3">
+                                    <span class="milestone-icon">⭐</span>
+                                    <span>中級者</span>
+                                </div>
+                                <div class="milestone" id="milestone-4">
+                                    <span class="milestone-icon">🏆</span>
+                                    <span>上級者</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- グラフ -->
+                        <div class="chart-container">
+                            <h3>📈 学習活動（過去30日）</h3>
+                            <div class="chart-wrapper">
+                                <canvas id="activity-chart" width="600" height="250"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="chart-container">
+                            <h3>🏆 よく学ぶトピック</h3>
+                            <div class="chart-wrapper">
+                                <canvas id="keywords-chart" width="600" height="250"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- 推奨トピック -->
+                        <div class="recommendations-container">
+                            <h3>💡 次に学ぶべきトピック</h3>
+                            <div id="recommendations-list"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Glossary Section -->
+                <section class="glossary-section" id="glossary-section" hidden>
+                    <div class="glossary-header">
+                        <h2>📖 Python用語集</h2>
+                        <button class="btn btn-outline" id="close-glossary-btn">✕ 閉じる</button>
+                    </div>
+
+                    <div class="glossary-content">
+                        <!-- Progress Summary -->
+                        <div class="glossary-progress-summary">
+                            <span class="progress-label">学習進捗:</span>
+                            <span class="progress-numbers">
+                                <span id="learned-count">0</span> / <span id="total-keyword-count">0</span> 用語
+                            </span>
+                        </div>
+
+                        <!-- Keyword Index TOC -->
+                        <div class="keyword-index-toc" id="keyword-index-toc">
+                            <!-- Categories will be rendered here by JavaScript -->
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Learning Center Section -->
+                <section class="learning-center-section" id="learning-center-section" hidden>
+                    <div class="learning-center-header">
+                        <h2>🎓 学習センター</h2>
+                        <button class="btn btn-outline" id="close-learning-center-btn">✕ 閉じる</button>
+                    </div>
+
+                    <div class="learning-center-content">
+                        <!-- タブナビゲーション -->
+                        <div class="lc-tabs">
+                            <button class="lc-tab active" data-tab="paths">🗺️ 学習パス</button>
+                            <button class="lc-tab" data-tab="badges">🏆 バッジ</button>
+                            <button class="lc-tab" data-tab="review">🔔 復習</button>
+                            <button class="lc-tab" data-tab="history">📝 履歴</button>
+                        </div>
+
+                        <!-- 学習パスタブ -->
+                        <div class="lc-tab-content active" id="tab-paths">
+                            <div class="streak-banner" id="streak-banner">
+                                <span class="streak-icon">🔥</span>
+                                <span class="streak-text">連続学習: <strong id="streak-days">0</strong>日</span>
+                            </div>
+
+                            <h3>📚 学習パスを選択</h3>
+                            <div class="learning-paths-grid" id="learning-paths-grid">
+                                <!-- Learning paths will be rendered here -->
+                            </div>
+
+                            <h3>📈 進行中のパス</h3>
+                            <div class="active-paths" id="active-paths">
+                                <p class="empty-message">まだ学習パスを開始していません</p>
+                            </div>
+                        </div>
+
+                        <!-- バッジタブ -->
+                        <div class="lc-tab-content" id="tab-badges">
+                            <div class="badges-summary">
+                                <span class="badges-count">獲得バッジ: <strong id="earned-badges-count">0</strong> / <span id="total-badges-count">0</span></span>
+                            </div>
+
+                            <h3>🏆 獲得済みバッジ</h3>
+                            <div class="badges-grid earned" id="earned-badges-grid">
+                                <p class="empty-message">まだバッジを獲得していません</p>
+                            </div>
+
+                            <h3>🔒 未獲得バッジ</h3>
+                            <div class="badges-grid locked" id="locked-badges-grid">
+                                <!-- Locked badges will be rendered here -->
+                            </div>
+                        </div>
+
+                        <!-- 復習タブ -->
+                        <div class="lc-tab-content" id="tab-review">
+                            <div class="review-due-section">
+                                <h3>⏰ 復習が必要な用語</h3>
+                                <div class="review-due-list" id="review-due-list">
+                                    <p class="empty-message">復習が必要な用語はありません</p>
+                                </div>
+                            </div>
+
+                            <div class="review-upcoming-section">
+                                <h3>📅 今後の復習予定</h3>
+                                <div class="review-upcoming-list" id="review-upcoming-list">
+                                    <p class="empty-message">復習予定はありません</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 履歴タブ -->
+                        <div class="lc-tab-content" id="tab-history">
+                            <h3>💻 練習問題の履歴</h3>
+                            <div class="practice-stats" id="practice-stats">
+                                <div class="stat-item">
+                                    <span class="stat-value" id="practice-total">0</span>
+                                    <span class="stat-label">挑戦回数</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-value" id="practice-correct">0</span>
+                                    <span class="stat-label">正解数</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-value" id="practice-accuracy">0%</span>
+                                    <span class="stat-label">正解率</span>
+                                </div>
+                            </div>
+                            <div class="practice-history-list" id="practice-history-list">
+                                <p class="empty-message">まだ練習問題に挑戦していません</p>
+                            </div>
+
+                            <h3>📝 コード実行履歴</h3>
+                            <div class="code-history-list" id="code-history-list">
+                                <p class="empty-message">コード実行履歴はありません</p>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- Explanation Card -->
+                <div class="explanation-card" id="explanation-card" hidden>
+                    <div class="card-header">
+                        <h2 class="term-title" id="term-title">用語名</h2>
+                        <div class="level-indicator" id="level-indicator">
+                            <span class="level-badge level-1" data-level="1">Lv.1</span>
+                            <span class="level-badge level-2" data-level="2">Lv.2</span>
+                            <span class="level-badge level-3" data-level="3">Lv.3</span>
+                        </div>
+                    </div>
+
+                    <div class="card-body">
+                        <div class="explanation-content markdown-body" id="explanation-content">
+                            <!-- Markdown content will be rendered here -->
+                        </div>
+                    </div>
+
+                    <div class="card-actions">
+                        <button id="understand-btn" class="btn btn-success">
+                            ✓ わかった！
+                        </button>
+                        <button id="more-detail-btn" class="btn btn-secondary">
+                            🔍 もっと詳しく
+                        </button>
+                        <button id="practice-btn" class="btn btn-practice">
+                            💻 実践
+                        </button>
+                    </div>
+
+                    <!-- Related Keywords -->
+                    <div class="related-keywords" id="related-keywords" hidden>
+                        <div class="related-keywords-header">
+                            <span>📚 関連キーワードも学ぶ</span>
+                        </div>
+                        <div class="related-keywords-list" id="related-keywords-list">
+                            <!-- Related keyword buttons will be inserted here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Additional Explanations Container -->
+                <div id="additional-explanations">
+                    <!-- Additional explanations will be appended here -->
+                </div>
+
+                <!-- Practice Mode Card -->
+                <div class="practice-card" id="practice-card" hidden>
+                    <div class="card-header practice-header">
+                        <h2 class="term-title" id="practice-title">実践問題</h2>
+                        <button id="close-practice-btn" class="btn-icon" title="閉じる">&times;</button>
+                    </div>
+
+                    <div class="card-body">
+                        <div class="practice-problem" id="practice-problem">
+                            <!-- Problem description will be loaded here -->
+                        </div>
+
+                        <div class="practice-editor">
+                            <label for="practice-code">コードを入力:</label>
+                            <div id="practice-code-editor" class="monaco-editor-container"></div>
+                        </div>
+
+                        <div class="practice-actions">
+                            <button id="check-answer-btn" class="btn btn-primary">
+                                ✓ 回答を確認
+                            </button>
+                            <button id="show-hint-btn" class="btn btn-secondary">
+                                💡 ヒント
+                            </button>
+                            <button id="show-answer-btn" class="btn btn-outline">
+                                📖 解答を見る
+                            </button>
+                        </div>
+
+                        <div class="practice-hint" id="practice-hint" hidden>
+                            <!-- Hint will be shown here -->
+                        </div>
+
+                        <div class="practice-answer" id="practice-answer" hidden>
+                            <!-- Answer will be shown here -->
+                        </div>
+
+                        <div class="practice-result" id="practice-result" hidden>
+                            <!-- Result feedback will be shown here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Success Message -->
+                <div class="success-message" id="success-message" hidden>
+                    <div class="success-icon">🎉</div>
+                    <p class="success-text">素晴らしい！理解できましたね！</p>
+                    <p class="success-subtext">次の用語を検索してみましょう</p>
+                </div>
+
+                <!-- Error Message -->
+                <div class="error-message" id="error-message" hidden>
+                    <div class="error-icon">⚠️</div>
+                    <p class="error-text" id="error-text">エラーが発生しました</p>
+                    <button class="btn btn-outline" id="retry-btn">再試行</button>
+                </div>
+
+                <!-- Welcome Message (initial state) -->
+                <div class="welcome-message" id="welcome-message">
+                    <div class="welcome-icon">🎯</div>
+                    <h2>Python用語を学習しましょう</h2>
+                    <p>上の検索ボックスに知りたい用語を入力してください。</p>
+                    <p>あなたのレベルに合わせた解説が表示されます。</p>
+                    <div class="example-terms">
+                        <p>例：</p>
+                        <button class="example-btn" data-term="変数">変数</button>
+                        <button class="example-btn" data-term="リスト">リスト</button>
+                        <button class="example-btn" data-term="関数">関数</button>
+                        <button class="example-btn" data-term="クラス">クラス</button>
+                        <button class="example-btn" data-term="デコレータ">デコレータ</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Profile Modal -->
+        <div class="modal-overlay" id="profile-modal" hidden>
+            <div class="modal">
+                <div class="modal-header">
+                    <h2>📊 学習プロファイル</h2>
+                    <button class="modal-close" id="modal-close">&times;</button>
+                </div>
+                <div class="modal-body" id="profile-content">
+                    <!-- Profile content will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- History Detail Modal -->
+        <div class="modal-overlay" id="history-modal" hidden>
+            <div class="modal history-detail-modal">
+                <div class="modal-header">
+                    <h2 id="history-modal-title">📖 履歴詳細</h2>
+                    <button class="modal-close" id="history-modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="history-modal-meta" id="history-modal-meta"></div>
+                    <div class="history-modal-content markdown-body" id="history-modal-content">
+                        <!-- History explanation will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loading-overlay" hidden>
+            <div class="loading-spinner"></div>
+            <p>読み込み中...</p>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
