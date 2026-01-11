@@ -4,7 +4,7 @@ Python学習支援アプリケーション用
 """
 
 from typing import Optional, List, Dict
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from database import (
-    init_db, get_db, get_or_create_user,
+    init_db, get_db, get_or_create_user, check_user_exists, User,
     add_search_history, get_search_history,
     update_understanding_level, get_understanding_level, get_learned_terms,
     get_cached_explanation, cache_explanation, clear_explanation_cache,
@@ -85,6 +85,63 @@ if settings.is_production:
 
 # データベース初期化
 init_db()
+
+
+# ========== 認証関連 ==========
+
+async def get_current_user(
+    db: Session = Depends(get_db),
+    x_username: str = Header(None, alias="X-Username")
+) -> User:
+    """X-Usernameヘッダーから現在のユーザーを取得"""
+    if not x_username or not x_username.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="認証が必要です。ログインしてください。"
+        )
+    try:
+        return get_or_create_user(db, username=x_username.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class LoginRequest(BaseModel):
+    """ログインリクエスト"""
+    username: str
+
+
+class LoginResponse(BaseModel):
+    """ログインレスポンス"""
+    username: str
+    is_new_user: bool
+    message: str
+
+
+@app.post("/auth/login", response_model=LoginResponse)
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """ユーザー名でログイン（新規の場合はアカウント作成）"""
+    username = request.username.strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="ユーザー名を入力してください")
+
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="ユーザー名は2文字以上で入力してください")
+
+    if len(username) > 50:
+        raise HTTPException(status_code=400, detail="ユーザー名は50文字以内で入力してください")
+
+    # ユーザーが既に存在するかチェック
+    is_new = not check_user_exists(db, username)
+
+    # ユーザーを取得または作成
+    user = get_or_create_user(db, username=username)
+
+    return LoginResponse(
+        username=user.username,
+        is_new_user=is_new,
+        message="新しいアカウントを作成しました！" if is_new else f"おかえりなさい、{user.username}さん！"
+    )
 
 
 # ========== リクエスト/レスポンスモデル ==========
@@ -533,7 +590,11 @@ async def root():
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search_term(request: SearchRequest, db: Session = Depends(get_db)):
+async def search_term(
+    request: SearchRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """
     用語を検索し、解説を生成する
     """
@@ -544,9 +605,6 @@ async def search_term(request: SearchRequest, db: Session = Depends(get_db)):
 
     if not term:
         raise HTTPException(status_code=400, detail="検索用語を入力してください")
-
-    # ユーザーを取得または作成
-    user = get_or_create_user(db)
 
     # 検索履歴を保存
     print(f"🔎 Search endpoint called: term='{term}', user_id={user.id}", flush=True)
@@ -597,15 +655,17 @@ async def search_term(request: SearchRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/feedback", response_model=FeedbackResponse)
-async def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db)):
+async def submit_feedback(
+    request: FeedbackRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """
     理解度フィードバックを受け取り、必要に応じて次のレベルの解説を返す
     """
     term = request.term.strip()
     current_level = request.current_level
     understood = request.understood
-
-    user = get_or_create_user(db)
 
     if understood:
         # 「わかった」→ 理解度を記録
@@ -652,13 +712,16 @@ async def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db
 
 
 @app.post("/practice", response_model=PracticeResponse)
-async def get_practice_problem(request: PracticeRequest, db: Session = Depends(get_db)):
+async def get_practice_problem(
+    request: PracticeRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """練習問題を取得（Claude API使用）"""
     term = request.term.strip()
     level = request.level
-    
+
     # ユーザーの学習履歴を取得
-    user = get_or_create_user(db)
     learned = get_learned_terms(db, user.id)
     learned_term_list = [l.term for l in learned]
     
@@ -923,11 +986,14 @@ async def execute_code(request: ExecuteRequest):
 
 
 @app.get("/history")
-async def get_history(limit: int = 20, db: Session = Depends(get_db)):
+async def get_history(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """
     検索履歴を取得
     """
-    user = get_or_create_user(db)
     history = get_search_history(db, user.id, limit)
 
     # 理解済み用語を取得してセットに変換（高速検索用）
@@ -948,11 +1014,13 @@ async def get_history(limit: int = 20, db: Session = Depends(get_db)):
 
 
 @app.get("/profile", response_model=ProfileResponse)
-async def get_profile(db: Session = Depends(get_db)):
+async def get_profile(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """
     学習者プロファイルを取得
     """
-    user = get_or_create_user(db)
 
     # 検索履歴
     history = get_search_history(db, user.id, 10)
@@ -1006,9 +1074,11 @@ async def clear_cache(db: Session = Depends(get_db)):
 
 
 @app.delete("/history")
-async def clear_history(db: Session = Depends(get_db)):
+async def clear_history(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """学習履歴を全てクリア（検索履歴と理解度記録）"""
-    user = get_or_create_user(db)
     result = clear_user_history(db, user.id)
     return {
         "message": "学習履歴をクリアしました",
@@ -1020,9 +1090,11 @@ async def clear_history(db: Session = Depends(get_db)):
 # ========== 学習分析エンドポイント ==========
 
 @app.get("/analytics/daily")
-async def get_daily_analytics(db: Session = Depends(get_db)):
+async def get_daily_analytics(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """日別の学習統計を取得"""
-    user = get_or_create_user(db)
 
     search_data = get_daily_search_counts(db, user.id, 30)
     understood_data = get_daily_understood_counts(db, user.id, 30)
@@ -1035,27 +1107,33 @@ async def get_daily_analytics(db: Session = Depends(get_db)):
 
 
 @app.get("/analytics/keywords")
-async def get_keywords_analytics(db: Session = Depends(get_db)):
+async def get_keywords_analytics(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """キーワードランキングを取得"""
-    user = get_or_create_user(db)
     ranking = get_keyword_ranking(db, user.id, 20)
 
     return {"keywords": ranking}
 
 
 @app.get("/analytics/progress")
-async def get_progress_analytics(db: Session = Depends(get_db)):
+async def get_progress_analytics(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """学習進捗の概要を取得"""
-    user = get_or_create_user(db)
     stats = get_study_statistics(db, user.id)
 
     return stats
 
 
 @app.get("/analytics/recommendations")
-async def get_recommendations(db: Session = Depends(get_db)):
+async def get_recommendations(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """次に学ぶべきトピックを提案"""
-    user = get_or_create_user(db)
 
     # 理解済み用語を取得
     learned = get_learned_terms(db, user.id)
@@ -1132,9 +1210,11 @@ async def get_all_badges():
 
 
 @app.get("/badges/earned")
-async def get_earned_badges(db: Session = Depends(get_db)):
+async def get_earned_badges(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """獲得済みバッジを取得"""
-    user = get_or_create_user(db)
     achievements = get_user_achievements(db, user.id)
     return {
         "earned_badges": [
@@ -1153,9 +1233,11 @@ async def get_earned_badges(db: Session = Depends(get_db)):
 
 
 @app.post("/badges/check")
-async def check_badges(db: Session = Depends(get_db)):
+async def check_badges(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """バッジ獲得条件をチェックして付与"""
-    user = get_or_create_user(db)
     awarded = check_and_award_badges(db, user.id)
     return {
         "newly_awarded": [
@@ -1171,9 +1253,11 @@ async def check_badges(db: Session = Depends(get_db)):
 
 
 @app.get("/streak")
-async def get_streak(db: Session = Depends(get_db)):
+async def get_streak(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """連続学習日数を取得"""
-    user = get_or_create_user(db)
     streak = calculate_streak(db, user.id)
     return {"streak_days": streak}
 
@@ -1199,9 +1283,11 @@ async def get_all_learning_paths():
 
 
 @app.get("/learning-paths/progress")
-async def get_learning_path_progress(db: Session = Depends(get_db)):
+async def get_learning_path_progress(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """ユーザーの学習パス進捗を取得"""
-    user = get_or_create_user(db)
     user_paths = get_user_learning_paths(db, user.id)
 
     progress = []
@@ -1230,9 +1316,12 @@ class StartPathRequest(BaseModel):
 
 
 @app.post("/learning-paths/start")
-async def start_path(request: StartPathRequest, db: Session = Depends(get_db)):
+async def start_path(
+    request: StartPathRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """学習パスを開始"""
-    user = get_or_create_user(db)
     path = start_learning_path(db, user.id, request.path_id)
 
     if not path:
@@ -1254,9 +1343,12 @@ class UpdatePathRequest(BaseModel):
 
 
 @app.post("/learning-paths/update")
-async def update_path_progress(request: UpdatePathRequest, db: Session = Depends(get_db)):
+async def update_path_progress(
+    request: UpdatePathRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """学習パスの進捗を更新"""
-    user = get_or_create_user(db)
     path = update_learning_path_progress(db, user.id, request.path_id, request.term)
 
     if not path:
@@ -1281,9 +1373,12 @@ class SavePracticeResultRequest(BaseModel):
 
 
 @app.post("/practice/result")
-async def save_practice(request: SavePracticeResultRequest, db: Session = Depends(get_db)):
+async def save_practice(
+    request: SavePracticeResultRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """練習問題の結果を保存"""
-    user = get_or_create_user(db)
     result = save_practice_result(
         db, user.id,
         request.term, request.problem_id,
@@ -1304,9 +1399,12 @@ async def save_practice(request: SavePracticeResultRequest, db: Session = Depend
 
 
 @app.get("/practice/history")
-async def get_practice_history(limit: int = 50, db: Session = Depends(get_db)):
+async def get_practice_history(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """練習問題の履歴を取得"""
-    user = get_or_create_user(db)
     results = get_practice_results(db, user.id, limit)
 
     # 統計計算
@@ -1341,9 +1439,12 @@ class SaveCodeExecutionRequest(BaseModel):
 
 
 @app.post("/code-history/save")
-async def save_code_history(request: SaveCodeExecutionRequest, db: Session = Depends(get_db)):
+async def save_code_history(
+    request: SaveCodeExecutionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """コード実行履歴を保存"""
-    user = get_or_create_user(db)
     execution = save_code_execution(
         db, user.id,
         request.term, request.code,
@@ -1353,9 +1454,12 @@ async def save_code_history(request: SaveCodeExecutionRequest, db: Session = Dep
 
 
 @app.get("/code-history")
-async def get_code_history(limit: int = 50, db: Session = Depends(get_db)):
+async def get_code_history(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """コード実行履歴を取得"""
-    user = get_or_create_user(db)
     history = get_code_execution_history(db, user.id, limit)
 
     return {
@@ -1380,9 +1484,12 @@ class ScheduleReviewRequest(BaseModel):
 
 
 @app.post("/review/schedule")
-async def schedule_term_review(request: ScheduleReviewRequest, db: Session = Depends(get_db)):
+async def schedule_term_review(
+    request: ScheduleReviewRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """復習をスケジュール"""
-    user = get_or_create_user(db)
     schedule = schedule_review(db, user.id, request.term)
 
     return {
@@ -1395,9 +1502,11 @@ async def schedule_term_review(request: ScheduleReviewRequest, db: Session = Dep
 
 
 @app.get("/review/due")
-async def get_due_review_items(db: Session = Depends(get_db)):
+async def get_due_review_items(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """期限が来た復習項目を取得"""
-    user = get_or_create_user(db)
     due = get_due_reviews(db, user.id)
 
     return {
@@ -1414,9 +1523,12 @@ async def get_due_review_items(db: Session = Depends(get_db)):
 
 
 @app.get("/review/upcoming")
-async def get_upcoming_review_items(days: int = 7, db: Session = Depends(get_db)):
+async def get_upcoming_review_items(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """今後の復習項目を取得"""
-    user = get_or_create_user(db)
     upcoming = get_upcoming_reviews(db, user.id, days)
 
     return {
@@ -1436,9 +1548,11 @@ async def get_upcoming_review_items(days: int = 7, db: Session = Depends(get_db)
 # ---------- データエクスポート API ----------
 
 @app.get("/export")
-async def export_data(db: Session = Depends(get_db)):
+async def export_data(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """学習データをエクスポート"""
-    user = get_or_create_user(db)
     data = export_user_data(db, user.id)
     return data
 

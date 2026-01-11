@@ -171,15 +171,28 @@ def get_db():
         db.close()
 
 
-def get_or_create_user(db, username: str = "default_user") -> User:
+def get_or_create_user(db, username: str) -> User:
     """ユーザーを取得または作成"""
-    user = db.query(User).filter(User.username == username).first()
+    if not username or not username.strip():
+        raise ValueError("Username is required")
+    # ユーザー名を正規化（小文字、前後の空白削除）
+    normalized_username = username.strip().lower()
+    user = db.query(User).filter(User.username == normalized_username).first()
     if not user:
-        user = User(username=username)
+        user = User(username=normalized_username)
         db.add(user)
         db.commit()
         db.refresh(user)
     return user
+
+
+def check_user_exists(db, username: str) -> bool:
+    """ユーザーが存在するかチェック"""
+    if not username or not username.strip():
+        return False
+    normalized_username = username.strip().lower()
+    user = db.query(User).filter(User.username == normalized_username).first()
+    return user is not None
 
 
 def normalize_term(term: str) -> str:

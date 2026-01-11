@@ -7,6 +7,8 @@ const API_BASE_URL = '/api';
 
 // State management
 const state = {
+    username: null,  // Current logged in username
+    isLoggedIn: false,  // Authentication status
     currentTerm: null,
     currentLevel: 1,
     maxLevel: 3,
@@ -67,10 +69,148 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeElements();
     initializeTheme();
     setupEventListeners();
-    loadInitialData();
     configureMarked();
-    initializeMonacoEditor();
+
+    // Check if user is logged in
+    if (checkAuth()) {
+        // User is logged in, show main app
+        hideLoginScreen();
+        loadInitialData();
+        initializeMonacoEditor();
+    } else {
+        // Show login screen
+        showLoginScreen();
+    }
 });
+
+// ========== Authentication Functions ==========
+
+// Check if user is logged in (from localStorage)
+function checkAuth() {
+    const username = localStorage.getItem('username');
+    if (username) {
+        state.username = username;
+        state.isLoggedIn = true;
+        return true;
+    }
+    return false;
+}
+
+// Login function
+async function login(username) {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim() })
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'ログインに失敗しました' }));
+        throw new Error(error.detail || 'ログインに失敗しました');
+    }
+
+    const data = await response.json();
+
+    // Store in localStorage
+    localStorage.setItem('username', data.username);
+    state.username = data.username;
+    state.isLoggedIn = true;
+
+    return data;
+}
+
+// Logout function
+function logout() {
+    localStorage.removeItem('username');
+    state.username = null;
+    state.isLoggedIn = false;
+
+    // Show login screen
+    showLoginScreen();
+
+    // Clear any loaded data
+    state.currentTerm = null;
+    state.currentLevel = 1;
+    state.currentPractice = null;
+    state.loadedRelatedKeywords.clear();
+}
+
+// Show login screen
+function showLoginScreen() {
+    document.getElementById('login-screen').hidden = false;
+    document.getElementById('app-container').hidden = true;
+}
+
+// Hide login screen and show app
+function hideLoginScreen() {
+    document.getElementById('login-screen').hidden = true;
+    document.getElementById('app-container').hidden = false;
+    updateUsernameDisplay();
+}
+
+// Update username display in header
+function updateUsernameDisplay() {
+    const usernameDisplay = document.getElementById('username-display');
+    if (usernameDisplay && state.username) {
+        usernameDisplay.textContent = state.username;
+    }
+}
+
+// Handle login form submission
+async function handleLoginSubmit(e) {
+    e.preventDefault();
+
+    const usernameInput = document.getElementById('username-input');
+    const loginBtn = document.getElementById('login-btn');
+    const loginError = document.getElementById('login-error');
+    const errorText = document.getElementById('login-error-text');
+
+    const username = usernameInput.value.trim();
+
+    if (!username) {
+        usernameInput.focus();
+        return;
+    }
+
+    // Show loading
+    loginBtn.disabled = true;
+    loginBtn.querySelector('.btn-text').hidden = true;
+    loginBtn.querySelector('.btn-loading').hidden = false;
+    loginError.hidden = true;
+
+    try {
+        const result = await login(username);
+
+        // Hide login screen
+        hideLoginScreen();
+
+        // Show welcome notification
+        if (result.is_new_user) {
+            showNotification('アカウントを作成しました！学習を始めましょう！', 'success');
+        } else {
+            showNotification(`おかえりなさい、${result.username}さん！`, 'success');
+        }
+
+        // Load user data
+        await loadInitialData();
+        initializeMonacoEditor();
+
+    } catch (error) {
+        errorText.textContent = error.message;
+        loginError.hidden = false;
+    } finally {
+        loginBtn.disabled = false;
+        loginBtn.querySelector('.btn-text').hidden = false;
+        loginBtn.querySelector('.btn-loading').hidden = true;
+    }
+}
+
+// Handle logout
+function handleLogout() {
+    if (confirm('ログアウトしますか？')) {
+        logout();
+    }
+}
 
 // Cache DOM elements
 function initializeElements() {
@@ -242,6 +382,18 @@ function initializeMonacoEditor() {
 
 // Setup event listeners
 function setupEventListeners() {
+    // Login form
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', handleLoginSubmit);
+    }
+
+    // Logout button
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', handleLogout);
+    }
+
     // Search functionality
     elements.searchBtn.addEventListener('click', handleSearch);
     elements.searchInput.addEventListener('keypress', (e) => {
@@ -356,14 +508,34 @@ async function loadInitialData() {
 
 // API call helper
 async function apiCall(endpoint, options = {}) {
+    // Check authentication (except for login endpoint)
+    if (!endpoint.startsWith('/auth/') && !state.isLoggedIn) {
+        throw new Error('ログインが必要です');
+    }
+
     const url = `${API_BASE_URL}${endpoint}`;
-    const defaultOptions = {
-        headers: {
-            'Content-Type': 'application/json',
-        },
+    const headers = {
+        'Content-Type': 'application/json',
     };
 
-    const response = await fetch(url, { ...defaultOptions, ...options });
+    // Add username header if logged in
+    if (state.username) {
+        headers['X-Username'] = state.username;
+    }
+
+    const defaultOptions = { headers };
+
+    const response = await fetch(url, {
+        ...defaultOptions,
+        ...options,
+        headers: { ...headers, ...(options.headers || {}) }
+    });
+
+    // Handle 401 Unauthorized - redirect to login
+    if (response.status === 401) {
+        logout();
+        throw new Error('セッションが切れました。再度ログインしてください。');
+    }
 
     if (!response.ok) {
         const error = await response.json().catch(() => ({ detail: 'Unknown error' }));

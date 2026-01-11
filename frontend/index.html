@@ -40,7 +40,47 @@
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
 </head>
 <body>
-    <div class="app-container">
+    <!-- Login Screen -->
+    <div class="login-screen" id="login-screen">
+        <div class="login-container">
+            <div class="login-header">
+                <div class="login-logo">🐍</div>
+                <h1>Python Learning</h1>
+                <p>Python用語学習アプリへようこそ</p>
+            </div>
+
+            <form class="login-form" id="login-form">
+                <div class="login-input-group">
+                    <label for="username-input">ユーザー名</label>
+                    <input
+                        type="text"
+                        id="username-input"
+                        placeholder="ユーザー名を入力"
+                        autocomplete="username"
+                        required
+                        minlength="2"
+                        maxlength="50"
+                    >
+                    <p class="login-hint">2〜50文字で入力してください</p>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-login" id="login-btn">
+                    <span class="btn-text">はじめる</span>
+                    <span class="btn-loading" hidden>⏳</span>
+                </button>
+
+                <p class="login-note">
+                    初めての場合は自動的にアカウントが作成されます
+                </p>
+            </form>
+
+            <div class="login-error" id="login-error" hidden>
+                <span class="error-text" id="login-error-text"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-container" id="app-container" hidden>
         <!-- Header -->
         <header class="header">
             <div class="header-left">
@@ -57,7 +97,12 @@
                 </button>
                 <div class="profile-summary" id="profile-summary">
                     <span class="stats-badge" id="stats-badge">読み込み中...</span>
+                    <span class="username-display" id="username-display"></span>
                 </div>
+                <button class="btn btn-logout" id="logout-btn" title="ログアウト">
+                    <span class="logout-icon">🚪</span>
+                    <span class="logout-text">ログアウト</span>
+                </button>
             </div>
         </header>
 
